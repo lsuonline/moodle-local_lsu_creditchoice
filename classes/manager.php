@@ -173,15 +173,13 @@ class manager {
             throw new \moodle_exception('invalidcutoffdays', 'local_lsu_creditchoice');
         }
 
-        $length = $DB->sql_length('sec.section_number');
         $groupconcat = $DB->sql_concat('sec.course_subject_abbreviation', "' '", 'cou.course_number', "' '", 'sec.section_number');
         $sql = "SELECT sec.id AS sectionid, sec.moodle_status, g.id AS groupid, g.courseid AS groupcourseid
                   FROM {enrol_wds_sections} sec
                   JOIN {enrol_wds_periods} per ON per.academic_period_id = sec.academic_period_id
                   JOIN {enrol_wds_courses} cou ON cou.course_listing_id = sec.course_listing_id
              LEFT JOIN {groups} g ON g.courseid = sec.moodle_status AND g.name = $groupconcat
-                 WHERE $length > :minlength
-                   AND per.academic_period_id = :academicperiodid
+                 WHERE per.academic_period_id = :academicperiodid
                    AND per.end_date > :cutoff
                    AND sec.moodle_status <> :pending
                    AND EXISTS (
@@ -190,7 +188,6 @@ class manager {
                           AND se.grading_scheme = :scheme
                    )";
         $records = $DB->get_recordset_sql($sql, [
-            'minlength' => 12,
             'academicperiodid' => $academicperiodid,
             'cutoff' => $now + $cutoffdays * DAYSECS,
             'pending' => 'Pending',
@@ -253,7 +250,6 @@ class manager {
             return [];
         }
 
-        $length = $DB->sql_length('sec.section_number');
         $groupconcat = $DB->sql_concat('sec.course_subject_abbreviation', "' '", 'cou.course_number', "' '", 'sec.section_number');
         $sql = "SELECT sec.id AS sectionid, g.id AS groupid, g.courseid AS groupcourseid
                   FROM {enrol_wds_sections} sec
@@ -262,7 +258,6 @@ class manager {
              LEFT JOIN {groups} g ON g.courseid = :courseid AND g.name = $groupconcat
                  WHERE sec.moodle_status = :moodlestatus
                    AND per.academic_period_id = :academicperiodid
-                   AND $length > :minlength
                    AND sec.moodle_status <> :pending
                    AND EXISTS (
                        SELECT 1 FROM {enrol_wds_student_enroll} se
@@ -273,7 +268,6 @@ class manager {
             'courseid' => $courseid,
             'moodlestatus' => (string)$courseid,
             'academicperiodid' => $academicperiodid,
-            'minlength' => 12,
             'pending' => 'Pending',
             'scheme' => 'LSUAM Choice Credit Modality',
         ]);
@@ -343,11 +337,12 @@ class manager {
 
         $conditions = [];
         foreach ($groupids as $gid) {
-            $conditions[] = ['type' => 'group', 'id' => (int)$gid, 'show' => false];
+            $conditions[] = ['type' => 'group', 'id' => (int)$gid];
         }
         $availability = json_encode([
             'op' => '|',
             'c' => $conditions,
+            'show' => false,
             'showc' => array_fill(0, count($conditions), false),
         ]);
 
@@ -436,11 +431,12 @@ class manager {
         if (!empty($groupids)) {
             $conditions = [];
             foreach ($groupids as $gid) {
-                $conditions[] = ['type' => 'group', 'id' => (int)$gid, 'show' => false];
+                $conditions[] = ['type' => 'group', 'id' => (int)$gid];
             }
             $targetavailability = json_encode([
                 'op' => '|',
                 'c' => $conditions,
+                'show' => false,
                 'showc' => array_fill(0, count($conditions), false),
             ]);
             if ($cm->availability !== $targetavailability) {
