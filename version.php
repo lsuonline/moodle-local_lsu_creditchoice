@@ -26,9 +26,9 @@
 defined('MOODLE_INTERNAL') || die();
 
 $plugin->component = 'local_lsu_creditchoice';
-$plugin->version = 2026102100;
+$plugin->version = 2026102200;
 $plugin->requires = 2024100700;
 $plugin->supported = [405, 503];
 $plugin->maturity = MATURITY_BETA;
-$plugin->release = '0.2.0-Alphabetized_Aardvark';
+$plugin->release = '0.3.0-Conscientious_Catahoula';
 $plugin->dependencies = ['mod_choice' => ANY_VERSION];

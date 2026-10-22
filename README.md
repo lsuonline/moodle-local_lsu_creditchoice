@@ -1,9 +1,10 @@
 # LSU college credit Choice
 
-Component: `local_lsu_creditchoice` • Version: 0.1.0 (beta)
+Component: `local_lsu_creditchoice` • Version: 0.3.0 (beta)
 
-Creates native Moodle Choice activities for Workday sections matching the supplied
-query. All source is included in this installable ZIP. No Moodle core modifications.
+Creates native Moodle Choice activities for eligible Workday sections in an
+administrator-selected academic period. All source is included in this installable
+ZIP. No Moodle core modifications.
 
 ## Install and configure
 
@@ -14,21 +15,47 @@ query. All source is included in this installable ZIP. No Moodle core modificati
 3. Enable activity tagging and create a **standard** tag in the collection used
    by course activities under **Site administration -> Appearance -> Manage tags**.
 4. Open **Site administration -> Plugins -> Local plugins -> LSU college credit Choice**.
-   Review the supplied name, HTML description, Yes/No labels, and select the tag.
+   Select an **Academic period** from the IDs in `enrol_wds_periods` and review
+   **Period-end cutoff (days)** (default: 10). Review the supplied name, HTML
+   description, Yes/No labels, and select the standard tag.
 5. Enable automation. It is disabled on installation to allow configuration first.
 6. Ensure Moodle cron runs every minute. The plugin task runs every 15 minutes;
    it can also be run from **Server -> Tasks -> Scheduled tasks** when Run now is enabled.
 
 The installed Workday integration must supply `enrol_wds_sections`,
-`enrol_wds_student_enroll`, and `enrol_wds_periods` with the columns in your query.
+`enrol_wds_student_enroll`, and `enrol_wds_periods` with the columns used by the
+[selection query](docs/configuration.md#eligibility-query). The period start date
+is no longer used to infer which academic period to process.
 The Workday component name is not assumed. Missing tables produce a task error.
 Database prefixes are handled by Moodle's `{table}` syntax.
 
+## Updating from an earlier version
+
+Replace the plugin files with this release and visit Moodle's Notifications page.
+The plugin version is `2026102200`. There are no plugin database schema changes,
+and this release does not include `db/upgrade.php`.
+
+Open the plugin settings and explicitly select an academic period after updating.
+There is no automatic period selection or fallback to date-based selection. Until
+a valid period is selected, new Choice creation reports a configuration error;
+existing managed Choices are still processed first. The cutoff defaults to ten
+days when it has not yet been saved. Review the cutoff and save the settings.
+
+See [configuration details](docs/configuration.md) and the [change log](CHANGELOG.md).
+
 ## Selection and activity behaviour
 
-- Section number length > 12; period start < now; period end > now + 10 days;
+- Section number length > 12; academic period matches the configured ID;
+  period end > now + the configured cutoff days (default: 10);
   at least one matching student-enrolment row with grading scheme exactly
   `LSUAM Choice Credit Modality`; Moodle status is not `Pending`.
+- The academic period dropdown lists distinct, nonempty IDs from
+  `enrol_wds_periods`, sorted by ID, with no date-based filtering. A selected
+  period may start in the future; only its configured ID and end-date cutoff
+  determine period eligibility. A missing/deleted selection blocks new creation.
+- The cutoff accepts nonnegative whole days. Setting it to 0 still requires the
+  period to end strictly after the task's comparison time. It does not disable
+  the end-date filter or change the Choice's seven-day response deadline.
 - Equivalent `EXISTS` replaces the multiplying enrolment join and `GROUP BY`.
   Results are deduplicated by course ID, so multiple sections produce one Choice.
 - `moodle_status` must be a canonical positive decimal Moodle course ID. Text,
@@ -47,6 +74,9 @@ Database prefixes are handled by Moodle's `{table}` syntax.
   closing time is retained. Finalised activities are not reopened automatically.
 - Creation settings (including tag/text) affect new activities only. Existing
   activities retain their original wording and tag.
+- Period/cutoff changes apply to the next creation scan. Managed Choices in other
+  periods continue to have deadlines processed, even when they no longer match
+  the selected period or its cutoff.
 
 ## Automatic No responses
 
@@ -113,15 +143,18 @@ The source uses syntax available in PHP 8.3 and no intentionally version-specifi
 Moodle/PHP pairings. Moodle 4.5 documents PHP 8.3 support; Moodle 5.3 documents PHP
 8.3 and 8.4. Use a PHP version supported by the installed Moodle core.
 
-Completed here: all PHP files parsed using php-parser in PHP 8.3 mode; XML parsed;
-ZIP structure/integrity and source whitespace checked. The environment has no PHP
-runtime, Moodle database, PHPUnit runner, or Moodle PHPCS installation. Therefore
-PHP lint, Moodle code checker, PHPUnit and live 4.5/5.3 acceptance tests have **not**
-been run. The plugin is marked beta rather than claiming unverified compliance.
+Validation completed for this release is recorded in
+[configuration and validation notes](docs/configuration.md#validation).
+The plugin remains beta pending live Moodle acceptance tests.
 
-Included `tests/manager_test.php` covers creation/settings, idempotency, default No
+Included `tests/manager_test.php` covers cutoff validation, creation/settings, idempotency, default No
 while preserving Yes, instructor exclusion, finalisation idempotency, missing end
-dates, and changed-option blocking. In a configured Moodle development checkout,
+dates, and changed-option blocking. `tests/selection_test.php` covers the explicit
+period, future-start periods, dropdown values, deduplication, configurable cutoff,
+zero/exact boundaries, the unsaved ten-day default, and invalid settings. Selection
+tests create and remove minimal Workday fixtures in the test database; they skip
+when Workday tables already exist, so they do not change an installed integration's
+schema. In a configured Moodle development checkout,
 run the corresponding commands with that checkout's PHP and PHPUnit setup:
 
 ```sh
@@ -137,7 +170,8 @@ Before production, verify the selection on representative Workday data, includin
 exact time boundaries, duplicate sections, invalid statuses and missing courses.
 On staging, confirm that a student can submit once, cannot change or submit after
 closing, that course-end edits update the calendar event, and that cron processes
-managed courses after they fall out of the ten-day query window. Verify automatic
+managed courses after changing the selected period or falling outside the configured
+period-end cutoff. Verify automatic
 No recipient eligibility with your actual enrolment lifetimes and role overrides.
 
 ## References

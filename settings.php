@@ -41,6 +41,20 @@ if ($hassiteconfig) {
             "$component/enabled", get_string('enabled', $component), get_string('enabled_desc', $component), 0
         ));
 
+        // Select an explicit Workday academic period instead of inferring it from its start date.
+        $periodchoices = ['' => get_string('selectacademicperiod', $component)]
+            + \local_lsu_creditchoice\manager::get_academic_periods();
+        $settings->add(new admin_setting_configselect(
+            "$component/academicperiodid", get_string('academicperiodid', $component),
+            get_string('academicperiodid_desc', $component), '', $periodchoices
+        ));
+
+        // Keep the period-end cutoff independent of the course activity response deadline.
+        $settings->add(new \local_lsu_creditchoice\admin\setting_cutoffdays(
+            "$component/cutoffdays", get_string('cutoffdays', $component),
+            get_string('cutoffdays_desc', $component), 10, PARAM_INT
+        ));
+
         // The name of the choice module.
         $settings->add(new admin_setting_configtext(
             "$component/choicename", get_string('choicename', $component), get_string('choicename_desc', $component),

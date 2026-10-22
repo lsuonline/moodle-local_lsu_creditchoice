@@ -33,6 +33,16 @@ namespace local_lsu_creditchoice;
  * @license http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 final class manager_test extends \advanced_testcase {
+    /** Only bounded, nonnegative whole-number cutoff settings are accepted. */
+    public function test_cutoff_days_validation(): void {
+        $this->assertSame(0, manager::validate_cutoff_days('0'));
+        $this->assertSame(10, manager::validate_cutoff_days('10'));
+        $this->assertSame(30, manager::validate_cutoff_days(30));
+        foreach (['', '-1', '1.5', 'abc', '999999999999999999999999999999'] as $value) {
+            $this->assertFalse(manager::validate_cutoff_days($value));
+        }
+    }
+
     /**
      * Configure settings and return the service.
      *

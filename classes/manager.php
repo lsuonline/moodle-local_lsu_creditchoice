@@ -108,7 +108,47 @@ class manager {
     }
 
     /**
-     * Find unique valid Moodle course IDs, preserving the supplied Workday predicates.
+     * List distinct academic period IDs available from the Workday integration.
+     *
+     * Missing tables must not prevent an administrator from opening the settings page.
+     *
+     * @return array Academic period IDs indexed by the same IDs.
+     */
+    public static function get_academic_periods(): array {
+        global $DB;
+        if (!$DB->get_manager()->table_exists(new \xmldb_table('enrol_wds_periods'))) {
+            return [];
+        }
+        $ids = $DB->get_fieldset_sql(
+            'SELECT DISTINCT academic_period_id
+               FROM {enrol_wds_periods}
+              WHERE academic_period_id IS NOT NULL
+           ORDER BY academic_period_id'
+        );
+        $periods = [];
+        foreach ($ids as $id) {
+            if ((string)$id === '') {
+                continue;
+            }
+            $periods[(string)$id] = (string)$id;
+        }
+        return $periods;
+    }
+
+    /**
+     * Validate a nonnegative whole-number cutoff without risking timestamp overflow.
+     *
+     * @param mixed $value Configured cutoff in days.
+     * @return int|false Validated days, or false for an invalid setting.
+     */
+    public static function validate_cutoff_days($value): int|false {
+        return filter_var($value, FILTER_VALIDATE_INT, [
+            'options' => ['min_range' => 0, 'max_range' => intdiv(PHP_INT_MAX, DAYSECS) - 1],
+        ]);
+    }
+
+    /**
+     * Find unique valid course IDs for the configured period and period-end cutoff.
      *
      * @param int $now Comparison timestamp.
      * @return int[] Course IDs.
@@ -121,13 +161,24 @@ class manager {
             }
         }
 
+        $academicperiodid = get_config('local_lsu_creditchoice', 'academicperiodid');
+        if ($academicperiodid === false || (string)$academicperiodid === '' ||
+                !$DB->record_exists('enrol_wds_periods', ['academic_period_id' => $academicperiodid])) {
+            throw new \moodle_exception('invalidacademicperiod', 'local_lsu_creditchoice');
+        }
+        $configuredcutoff = get_config('local_lsu_creditchoice', 'cutoffdays');
+        $cutoffdays = self::validate_cutoff_days($configuredcutoff === false ? 10 : $configuredcutoff);
+        if ($cutoffdays === false || $now > PHP_INT_MAX - $cutoffdays * DAYSECS) {
+            throw new \moodle_exception('invalidcutoffdays', 'local_lsu_creditchoice');
+        }
+
         // EXISTS avoids multiplying rows by enrolments and avoids nonportable GROUP BY sec.id.
         $length = $DB->sql_length('sec.section_number');
         $sql = "SELECT sec.id, sec.moodle_status
                   FROM {enrol_wds_sections} sec
                   JOIN {enrol_wds_periods} per ON per.academic_period_id = sec.academic_period_id
                  WHERE $length > :minlength
-                   AND per.start_date < :now
+                   AND per.academic_period_id = :academicperiodid
                    AND per.end_date > :cutoff
                    AND sec.moodle_status <> :pending
                    AND EXISTS (
@@ -136,7 +187,7 @@ class manager {
                           AND se.grading_scheme = :scheme
                    )";
         $records = $DB->get_recordset_sql($sql, [
-            'minlength' => 12, 'now' => $now, 'cutoff' => $now + 10 * DAYSECS,
+            'minlength' => 12, 'academicperiodid' => $academicperiodid, 'cutoff' => $now + $cutoffdays * DAYSECS,
             'pending' => 'Pending', 'scheme' => 'LSUAM Choice Credit Modality',
         ]);
         $ids = [];
