@@ -343,12 +343,11 @@ class manager {
 
         $conditions = [];
         foreach ($groupids as $gid) {
-            $conditions[] = ['type' => 'group', 'id' => (int)$gid];
+            $conditions[] = ['type' => 'group', 'id' => (int)$gid, 'show' => false];
         }
         $availability = json_encode([
             'op' => '|',
             'c' => $conditions,
-            'show' => false,
             'showc' => array_fill(0, count($conditions), false),
         ]);
 
@@ -437,12 +436,11 @@ class manager {
         if (!empty($groupids)) {
             $conditions = [];
             foreach ($groupids as $gid) {
-                $conditions[] = ['type' => 'group', 'id' => (int)$gid];
+                $conditions[] = ['type' => 'group', 'id' => (int)$gid, 'show' => false];
             }
             $targetavailability = json_encode([
                 'op' => '|',
                 'c' => $conditions,
-                'show' => false,
                 'showc' => array_fill(0, count($conditions), false),
             ]);
             if ($cm->availability !== $targetavailability) {
