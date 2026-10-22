@@ -48,7 +48,8 @@ final class selection_test extends \advanced_testcase {
         $this->preventResetByRollback();
         $tables = [
             'enrol_wds_periods' => ['academic_period_id', 'start_date', 'end_date'],
-            'enrol_wds_sections' => ['academic_period_id', 'moodle_status', 'section_number', 'section_listing_id'],
+            'enrol_wds_courses' => ['course_listing_id', 'course_number'],
+            'enrol_wds_sections' => ['academic_period_id', 'course_listing_id', 'course_subject_abbreviation', 'moodle_status', 'section_number', 'section_listing_id'],
             'enrol_wds_student_enroll' => ['section_listing_id', 'grading_scheme'],
         ];
         $dbman = $DB->get_manager();
@@ -114,12 +115,21 @@ final class selection_test extends \advanced_testcase {
         string $period,
         string $course,
         string $number = '1234567890123',
-        string $scheme = 'LSUAM Choice Credit Modality'
+        string $scheme = 'LSUAM Choice Credit Modality',
+        string $subject = 'BIOL',
+        string $coursenum = '1001',
+        string $listingid = 'course_listing_1'
     ): string {
         global $DB;
         $listing = 'listing_' . ++$this->sectioncount;
+        if (!$DB->record_exists('enrol_wds_courses', ['course_listing_id' => $listingid])) {
+            $DB->insert_record('enrol_wds_courses', (object)[
+                'course_listing_id' => $listingid, 'course_number' => $coursenum,
+            ]);
+        }
         $DB->insert_record('enrol_wds_sections', (object)[
-            'academic_period_id' => $period, 'moodle_status' => $course,
+            'academic_period_id' => $period, 'course_listing_id' => $listingid,
+            'course_subject_abbreviation' => $subject, 'moodle_status' => $course,
             'section_number' => $number, 'section_listing_id' => $listing,
         ]);
         $DB->insert_record('enrol_wds_student_enroll', (object)[
@@ -146,6 +156,11 @@ final class selection_test extends \advanced_testcase {
         $now = 1800000000;
         $this->add_period('PERIOD_A', $now + DAYSECS, $now + 30 * DAYSECS);
         $this->add_period('PERIOD_B', $now - DAYSECS, $now + 30 * DAYSECS);
+
+        // Create Moodle groups matching section names.
+        $g1 = $this->getDataGenerator()->create_group(['courseid' => 201, 'name' => 'BIOL 1001 1234567890123']);
+        $g2 = $this->getDataGenerator()->create_group(['courseid' => 202, 'name' => 'BIOL 1001 1234567890123']);
+
         $listing = $this->add_section('PERIOD_A', '201');
         $this->add_section('PERIOD_A', '201');
         $this->add_section('PERIOD_B', '202');
@@ -156,8 +171,60 @@ final class selection_test extends \advanced_testcase {
             'section_listing_id' => $listing, 'grading_scheme' => 'LSUAM Choice Credit Modality',
         ]);
         $this->assertSame([201], (new manager())->eligible_course_ids($now));
+        $this->assertSame([201 => [$g1->id]], (new manager())->get_eligible_course_groups($now));
         set_config('academicperiodid', 'PERIOD_B', 'local_lsu_creditchoice');
         $this->assertSame([202], (new manager())->eligible_course_ids($now));
+        $this->assertSame([202 => [$g2->id]], (new manager())->get_eligible_course_groups($now));
+    }
+
+    /** Courses without matching Moodle groups are omitted from eligible course groups. */
+    public function test_course_without_group_is_skipped(): void {
+        $now = 1800000000;
+        $this->add_period('PERIOD_A', $now, $now + 30 * DAYSECS);
+        $this->add_section('PERIOD_A', '301', '1234567890123');
+        // Course 301 has no group created in Moodle.
+        $this->assertSame([], (new manager())->get_eligible_course_groups($now));
+        $this->assertSame([], (new manager())->eligible_course_ids($now));
+    }
+
+    /** Duplicate group names across different courses do not trigger false unmatched flags. */
+    public function test_duplicate_group_names_across_courses(): void {
+        $now = 1800000000;
+        $this->add_period('PERIOD_A', $now, $now + 30 * DAYSECS);
+        $g1 = $this->getDataGenerator()->create_group(['courseid' => 401, 'name' => 'BIOL 1001 1234567890123']);
+        $g2 = $this->getDataGenerator()->create_group(['courseid' => 402, 'name' => 'BIOL 1001 1234567890123']);
+        $this->add_section('PERIOD_A', '401', '1234567890123');
+        $this->add_section('PERIOD_A', '402', '1234567890123');
+        $expected = [
+            401 => [$g1->id],
+            402 => [$g2->id],
+        ];
+        $this->assertSame($expected, (new manager())->get_eligible_course_groups($now));
+    }
+
+    /** get_course_groups filters sections by configured academic period. */
+    public function test_get_course_groups_filters_by_period(): void {
+        $now = 1800000000;
+        $this->add_period('PERIOD_A', $now, $now + 30 * DAYSECS);
+        $this->add_period('PERIOD_B', $now, $now + 30 * DAYSECS);
+        $g1 = $this->getDataGenerator()->create_group(['courseid' => 501, 'name' => 'BIOL 1001 1234567890123']);
+        $this->add_section('PERIOD_A', '501', '1234567890123');
+        // Unmatched section in PERIOD_B for course 501.
+        $this->add_section('PERIOD_B', '501', '1234567890999');
+
+        set_config('academicperiodid', 'PERIOD_A', 'local_lsu_creditchoice');
+        $this->assertSame([$g1->id], (new manager())->get_course_groups(501));
+    }
+
+    /** Courses with a mix of matched and unmatched sections are skipped. */
+    public function test_course_with_partially_unmatched_sections_is_skipped(): void {
+        $now = 1800000000;
+        $this->add_period('PERIOD_A', $now, $now + 30 * DAYSECS);
+        $this->getDataGenerator()->create_group(['courseid' => 302, 'name' => 'BIOL 1001 1234567890123']);
+        $this->add_section('PERIOD_A', '302', '1234567890123');
+        $this->add_section('PERIOD_A', '302', '1234567890999'); // No Moodle group for this section.
+        $this->assertSame([], (new manager())->get_eligible_course_groups($now));
+        $this->assertSame([], (new manager())->eligible_course_ids($now));
     }
 
     /** Use the configured number of days with a strict greater-than boundary. */

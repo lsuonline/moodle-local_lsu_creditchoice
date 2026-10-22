@@ -70,16 +70,25 @@ final class manager_test extends \advanced_testcase {
         global $DB;
         $service = $this->service();
         $course = $this->getDataGenerator()->create_course(['enddate' => time() + DAYSECS]);
-        $cmid = $service->create_for_course($course->id, $service->get_settings());
+        $group1 = $this->getDataGenerator()->create_group(['courseid' => $course->id]);
+        $group2 = $this->getDataGenerator()->create_group(['courseid' => $course->id]);
+        $cmid = $service->create_for_course($course->id, $service->get_settings(), [$group1->id, $group2->id]);
         $record = $DB->get_record('local_lsu_creditchoice', ['courseid' => $course->id], '*', MUST_EXIST);
         $choice = $DB->get_record('choice', ['id' => $record->choiceid], '*', MUST_EXIST);
+        $cm = $DB->get_record('course_modules', ['id' => $cmid], '*', MUST_EXIST);
+        $expectedavailability = json_encode([
+            'op' => '|',
+            'c' => [['type' => 'group', 'id' => (int)$group1->id, 'show' => false], ['type' => 'group', 'id' => (int)$group2->id, 'show' => false]],
+            'showc' => [false, false],
+        ]);
+        $this->assertEquals($expectedavailability, $cm->availability);
         $this->assertEquals($course->enddate + 7 * DAYSECS, $choice->timeclose);
         $this->assertEquals(0, $choice->allowupdate);
         $this->assertEquals(0, $choice->allowmultiple);
         $this->assertEquals(0, $choice->showresults);
         $this->assertCount(2, $DB->get_records('choice_options', ['choiceid' => $choice->id]));
         $this->assertNotEmpty(\core_tag_tag::get_item_tags('core', 'course_modules', $cmid));
-        $this->assertSame(0, $service->create_for_course($course->id, $service->get_settings()));
+        $this->assertSame(0, $service->create_for_course($course->id, $service->get_settings(), [$group->id]));
         $this->assertEquals(1, $DB->count_records('choice', ['course' => $course->id]));
     }
 
@@ -88,7 +97,8 @@ final class manager_test extends \advanced_testcase {
         global $DB;
         $service = $this->service();
         $course = $this->getDataGenerator()->create_course(['enddate' => time() + DAYSECS]);
-        $cmid = $service->create_for_course($course->id, $service->get_settings());
+        $group = $this->getDataGenerator()->create_group(['courseid' => $course->id]);
+        $cmid = $service->create_for_course($course->id, $service->get_settings(), [$group->id]);
         $yesuser = $this->getDataGenerator()->create_user();
         $nouser = $this->getDataGenerator()->create_user();
         $teacher = $this->getDataGenerator()->create_user();
@@ -126,7 +136,8 @@ final class manager_test extends \advanced_testcase {
         global $DB;
         $service = $this->service();
         $course = $this->getDataGenerator()->create_course(['enddate' => time() + DAYSECS]);
-        $service->create_for_course($course->id, $service->get_settings());
+        $group = $this->getDataGenerator()->create_group(['courseid' => $course->id]);
+        $service->create_for_course($course->id, $service->get_settings(), [$group->id]);
         $record = $DB->get_record('local_lsu_creditchoice', ['courseid' => $course->id]);
         $DB->set_field('choice_options', 'text', 'Now this means Yes', ['id' => $record->nooptionid]);
         $DB->set_field('course', 'enddate', time() - 8 * DAYSECS, ['id' => $course->id]);

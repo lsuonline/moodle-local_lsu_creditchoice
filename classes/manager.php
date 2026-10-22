@@ -57,9 +57,10 @@ class manager {
             $records->close();
         }
         $config = $this->get_settings();
-        foreach ($this->eligible_course_ids(time()) as $courseid) {
+        $coursegroups = $this->get_eligible_course_groups(time());
+        foreach ($coursegroups as $courseid => $groupids) {
             try {
-                $this->create_for_course($courseid, $config);
+                $this->create_for_course($courseid, $config, $groupids);
             } catch (\Throwable $e) {
                 $failed = true;
                 mtrace('Credit Choice course ' . $courseid . ': ' . $e->getMessage());
@@ -148,14 +149,14 @@ class manager {
     }
 
     /**
-     * Find unique valid course IDs for the configured period and period-end cutoff.
+     * Find unique valid course IDs and their matching Moodle group IDs for the configured period and cutoff.
      *
      * @param int $now Comparison timestamp.
-     * @return int[] Course IDs.
+     * @return array Map of course IDs to arrays of group IDs.
      */
-    public function eligible_course_ids(int $now): array {
+    public function get_eligible_course_groups(int $now): array {
         global $DB;
-        foreach (['enrol_wds_sections', 'enrol_wds_student_enroll', 'enrol_wds_periods'] as $table) {
+        foreach (['enrol_wds_sections', 'enrol_wds_student_enroll', 'enrol_wds_periods', 'enrol_wds_courses'] as $table) {
             if (!$DB->get_manager()->table_exists(new \xmldb_table($table))) {
                 throw new \moodle_exception('missingtable', 'local_lsu_creditchoice', '', $table);
             }
@@ -172,11 +173,13 @@ class manager {
             throw new \moodle_exception('invalidcutoffdays', 'local_lsu_creditchoice');
         }
 
-        // EXISTS avoids multiplying rows by enrolments and avoids nonportable GROUP BY sec.id.
         $length = $DB->sql_length('sec.section_number');
-        $sql = "SELECT sec.id, sec.moodle_status
+        $groupconcat = $DB->sql_concat('sec.course_subject_abbreviation', "' '", 'cou.course_number', "' '", 'sec.section_number');
+        $sql = "SELECT sec.id AS sectionid, sec.moodle_status, g.id AS groupid, g.courseid AS groupcourseid
                   FROM {enrol_wds_sections} sec
                   JOIN {enrol_wds_periods} per ON per.academic_period_id = sec.academic_period_id
+                  JOIN {enrol_wds_courses} cou ON cou.course_listing_id = sec.course_listing_id
+             LEFT JOIN {groups} g ON g.courseid = sec.moodle_status AND g.name = $groupconcat
                  WHERE $length > :minlength
                    AND per.academic_period_id = :academicperiodid
                    AND per.end_date > :cutoff
@@ -187,24 +190,123 @@ class manager {
                           AND se.grading_scheme = :scheme
                    )";
         $records = $DB->get_recordset_sql($sql, [
-            'minlength' => 12, 'academicperiodid' => $academicperiodid, 'cutoff' => $now + $cutoffdays * DAYSECS,
-            'pending' => 'Pending', 'scheme' => 'LSUAM Choice Credit Modality',
+            'minlength' => 12,
+            'academicperiodid' => $academicperiodid,
+            'cutoff' => $now + $cutoffdays * DAYSECS,
+            'pending' => 'Pending',
+            'scheme' => 'LSUAM Choice Credit Modality',
         ]);
-        $ids = [];
+
+        $allcourses = [];
+        $unmatchedcourses = [];
         try {
             foreach ($records as $record) {
                 $value = (string)$record->moodle_status;
-                // Never cast arbitrary status text to a course ID in SQL.
                 if (!ctype_digit($value) || (int)$value <= SITEID || (string)(int)$value !== $value) {
-                    mtrace('Credit Choice: skipped noncanonical course ID on section ' . $record->id);
+                    mtrace('Credit Choice: skipped noncanonical course ID on section ' . $record->sectionid);
                     continue;
                 }
-                $ids[(int)$value] = (int)$value;
+                $courseid = (int)$value;
+                if (!isset($allcourses[$courseid])) {
+                    $allcourses[$courseid] = [];
+                }
+                if ($record->groupid !== null && (int)$record->groupcourseid === $courseid) {
+                    $groupid = (int)$record->groupid;
+                    $allcourses[$courseid][$groupid] = $groupid;
+                } else {
+                    $unmatchedcourses[$courseid] = true;
+                }
             }
         } finally {
             $records->close();
         }
-        return array_values($ids);
+
+        $result = [];
+        ksort($allcourses);
+        foreach ($allcourses as $courseid => $groups) {
+            if (!empty($unmatchedcourses[$courseid]) || empty($groups)) {
+                mtrace('Credit Choice: skipped course ' . $courseid . ' because one or more sections had no matching Moodle groups.');
+            } else {
+                ksort($groups);
+                $result[$courseid] = array_values($groups);
+            }
+        }
+        return $result;
+    }
+
+    /**
+     * Get matching group IDs for a given course ID based on section matching.
+     *
+     * @param int $courseid Course ID.
+     * @return int[] Group IDs.
+     */
+    public function get_course_groups(int $courseid): array {
+        global $DB;
+        foreach (['enrol_wds_sections', 'enrol_wds_student_enroll', 'enrol_wds_courses', 'enrol_wds_periods'] as $table) {
+            if (!$DB->get_manager()->table_exists(new \xmldb_table($table))) {
+                return [];
+            }
+        }
+
+        $academicperiodid = get_config('local_lsu_creditchoice', 'academicperiodid');
+        if ($academicperiodid === false || (string)$academicperiodid === '') {
+            return [];
+        }
+
+        $length = $DB->sql_length('sec.section_number');
+        $groupconcat = $DB->sql_concat('sec.course_subject_abbreviation', "' '", 'cou.course_number', "' '", 'sec.section_number');
+        $sql = "SELECT sec.id AS sectionid, g.id AS groupid, g.courseid AS groupcourseid
+                  FROM {enrol_wds_sections} sec
+                  JOIN {enrol_wds_periods} per ON per.academic_period_id = sec.academic_period_id
+                  JOIN {enrol_wds_courses} cou ON cou.course_listing_id = sec.course_listing_id
+             LEFT JOIN {groups} g ON g.courseid = :courseid AND g.name = $groupconcat
+                 WHERE sec.moodle_status = :moodlestatus
+                   AND per.academic_period_id = :academicperiodid
+                   AND $length > :minlength
+                   AND sec.moodle_status <> :pending
+                   AND EXISTS (
+                       SELECT 1 FROM {enrol_wds_student_enroll} se
+                        WHERE se.section_listing_id = sec.section_listing_id
+                          AND se.grading_scheme = :scheme
+                   )";
+        $records = $DB->get_recordset_sql($sql, [
+            'courseid' => $courseid,
+            'moodlestatus' => (string)$courseid,
+            'academicperiodid' => $academicperiodid,
+            'minlength' => 12,
+            'pending' => 'Pending',
+            'scheme' => 'LSUAM Choice Credit Modality',
+        ]);
+        $groupids = [];
+        $unmatched = false;
+        try {
+            foreach ($records as $record) {
+                if ($record->groupid !== null && (int)$record->groupcourseid === $courseid) {
+                    $gid = (int)$record->groupid;
+                    $groupids[$gid] = $gid;
+                } else {
+                    $unmatched = true;
+                }
+            }
+        } finally {
+            $records->close();
+        }
+        if ($unmatched || empty($groupids)) {
+            mtrace('Credit Choice: skipped course ' . $courseid . ' because one or more sections had no matching Moodle groups.');
+            return [];
+        }
+        ksort($groupids);
+        return array_values($groupids);
+    }
+
+    /**
+     * Find unique valid course IDs for the configured period and period-end cutoff.
+     *
+     * @param int $now Comparison timestamp.
+     * @return int[] Course IDs.
+     */
+    public function eligible_course_ids(int $now): array {
+        return array_keys($this->get_eligible_course_groups($now));
     }
 
     /**
@@ -214,7 +316,7 @@ class manager {
      * @param \stdClass $config Validated plugin configuration.
      * @return int Course-module ID, or zero when skipped.
      */
-    public function create_for_course(int $courseid, \stdClass $config): int {
+    public function create_for_course(int $courseid, \stdClass $config, array $groupids = []): int {
         global $DB;
         $this->load_libraries();
         if ($DB->record_exists('local_lsu_creditchoice', ['courseid' => $courseid])) {
@@ -226,10 +328,30 @@ class manager {
             return 0;
         }
 
+        if (empty($groupids)) {
+            $groupids = $this->get_course_groups($courseid);
+        }
+        if (empty($groupids)) {
+            mtrace('Credit Choice: skipped course ' . $courseid . ' because no matching Moodle groups were found.');
+            return 0;
+        }
+
         // A restored/copied activity with our marker requires human review, never silent adoption.
         if ($DB->record_exists('course_modules', ['course' => $courseid, 'idnumber' => self::IDNUMBER])) {
             throw new \moodle_exception('existingmarker', 'local_lsu_creditchoice');
         }
+
+        $conditions = [];
+        foreach ($groupids as $gid) {
+            $conditions[] = ['type' => 'group', 'id' => (int)$gid];
+        }
+        $availability = json_encode([
+            'op' => '|',
+            'c' => $conditions,
+            'show' => false,
+            'showc' => array_fill(0, count($conditions), false),
+        ]);
+
         $transaction = $DB->start_delegated_transaction();
         try {
             $module = (object)[
@@ -259,6 +381,8 @@ class manager {
                 'completionsubmit' => 0,
                 'groupmode' => 0,
                 'groupingid' => 0,
+                'availability' => $availability,
+                'availabilityconditionsjson' => $availability,
                 'tags' => [$config->tagname],
             ];
             $module = add_moduleinfo($module, $course);
@@ -307,6 +431,24 @@ class manager {
             $DB->set_field('choice', 'timeclose', $deadline, ['id' => $choice->id]);
             choice_set_events($choice);
             rebuild_course_cache($course->id, true);
+        }
+
+        $groupids = $this->get_course_groups((int)$record->courseid);
+        if (!empty($groupids)) {
+            $conditions = [];
+            foreach ($groupids as $gid) {
+                $conditions[] = ['type' => 'group', 'id' => (int)$gid];
+            }
+            $targetavailability = json_encode([
+                'op' => '|',
+                'c' => $conditions,
+                'show' => false,
+                'showc' => array_fill(0, count($conditions), false),
+            ]);
+            if ($cm->availability !== $targetavailability) {
+                $DB->set_field('course_modules', 'availability', $targetavailability, ['id' => $cm->id]);
+                rebuild_course_cache($course->id, true);
+            }
         }
 
         // Grace period lets requests submitted immediately before closure finish.
