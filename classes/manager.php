@@ -361,7 +361,7 @@ class manager {
                 'option' => [$config->yeslabel, $config->nolabel],
                 'limit' => [0, 0],
                 'limitanswers' => 0,
-                'allowupdate' => 0,
+                'allowupdate' => 1,
                 'allowmultiple' => 0,
                 'showresults' => 0,
                 'publish' => 0,
